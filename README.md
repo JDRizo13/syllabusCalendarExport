@@ -73,7 +73,7 @@ pip install -r requirements.txt
 python -m uvicorn main:app --reload
 Will Run At: http://127.0.0.1:8000
 
-How It Works
+# How It Works
 	1.	User uploads a syllabus PDF
 	2.	Backend extracts text using PyMuPDF
 	3.	Parser identifies relevant lines (deadlines, exams, events)
@@ -81,13 +81,13 @@ How It Works
 	5.	Frontend displays an editable table
 	6.	User exports events as .ics
 
-Current Limitations
+# Current Limitations
 	•	Rule-based parser (may miss complex syllabus formats)
 	•	Limited time extraction accuracy
 	•	Some duplicate or noisy text may appear
 	•	English-only support
 
-Future Improvements
+# Future Improvements
 	•	NLP / LLM-based extraction for higher accuracy
 	•	Automatic semester/year detection
 	•	Table-aware parsing for structured syllabi
@@ -95,9 +95,9 @@ Future Improvements
 	•	Improved deduplication and filtering
 	•	Better UI (bulk edits, tagging, filters)
 
-Motivation
+# Motivation
 Students often spend time manually transferring syllabus deadlines into their calendars. This project automates that workflow, making it faster and less error-prone to stay organized throughout the semester.
 
-Author
+# Author
 Juan Rizo
 
