@@ -36,6 +36,7 @@ Upload a syllabus, automatically extract important dates (assignments, exams, de
 
 ## 📂 Project Structure
 ---
+```bash
 syllabus-calendar-extractor/
 ├── frontend/          # Next.js app
 │   ├── app/
@@ -45,7 +46,7 @@ syllabus-calendar-extractor/
 │   ├── main.py
 │   ├── sample_parser.py
 │   └── requirements.txt
-
+```
 ## Setup
 
 ### 1. Clone the repo
@@ -54,12 +55,15 @@ git clone https://github.com/yourusername/syllabus-calendar-extractor.git
 cd syllabus-calendar-extractor 
 ```
 ### 2. Frontend Setup 
+```bash
 cd frontend
 npm install
 npm run dev
+```
 Will Run At: http://localhost:3000 (Copy and paste in browser)
 
-### 2. Backend Setup 
+### 3. Backend Setup 
+```bash
 cd parser-service
 
 # Create virtual environment (recommended)
@@ -71,6 +75,7 @@ pip install -r requirements.txt
 
 # Run server
 python -m uvicorn main:app --reload
+```
 Will Run At: http://127.0.0.1:8000
 
 # How It Works
