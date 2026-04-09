@@ -16,8 +16,8 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:3000",
         "https://syllabus-calendar-export.vercel.app",
-        "https://syllabus-calendar-export-1qi9wbcsw-jdrizo13s-projects.vercel.app",
     ],
+    allow_origin_regex=r"https://.*vercel\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
