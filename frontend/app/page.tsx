@@ -1,8 +1,11 @@
 "use client";
 
+
 import { useState } from "react";
 import ReviewTable from "@/components/ReviewTable";
 import { ParsedEvent } from "@/lib/types";
+
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL;
 
 export default function HomePage() {
   const [file, setFile] = useState<File | null>(null);
@@ -21,7 +24,7 @@ export default function HomePage() {
       const formData = new FormData();
       formData.append("file", file);
 
-      const response = await fetch("http://127.0.0.1:8000/upload-syllabus", {
+      const response = await fetch(`${API_BASE_URL}/upload-syllabus`, {
         method: "POST",
         body: formData,
       });
@@ -43,7 +46,7 @@ export default function HomePage() {
     setIsExporting(true);
 
     try {
-      const response = await fetch("http://127.0.0.1:8000/export-ics", {
+      const response = await fetch(`${API_BASE_URL}/export-ics`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ events }),
