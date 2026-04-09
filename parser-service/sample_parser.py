@@ -1,4 +1,5 @@
 from typing import List, Dict, Optional
+from dataclasses import dataclass
 import uuid
 import fitz
 import re
@@ -20,6 +21,7 @@ MONTH_MAP = {
 }
 
 DATE_RE = re.compile(r"\b(Jan|January|Feb|February|Mar|March|Apr|April|May|Jun|June|Jul|July|Aug|August|Sep|Sept|September|Oct|October|Nov|November|Dec|December)\s+(\d{1,2})\b", re.I)
+DAY_MONTH_RE = re.compile(r"\b(\d{1,2})\s+(Jan|January|Feb|February|Mar|March|Apr|April|May|Jun|June|Jul|July|Aug|August|Sep|Sept|September|Oct|October|Nov|November|Dec|December)\b", re.I)
 NUMERIC_DATE_RE = re.compile(r"\b(\d{1,2})/(\d{1,2})(?:/(\d{2,4}))?\b")
 DATE_RANGE_RE = re.compile(r"\b(\d{1,2})/(\d{1,2})\s*[–-]\s*(\d{1,2})\b")
 TIME_RE = re.compile(r"(\d{1,2})(?::(\d{2}))?\s*(a\.?m\.?|p\.?m\.?)", re.I)
@@ -58,6 +60,28 @@ BAD_KEYWORDS = [
     "mailbox",
     "text:",
 ]
+
+
+@dataclass
+class ParsedCandidate:
+    raw_text: str
+    page_num: int
+    section: str
+    kind: str
+    date: Optional[str]
+    start_time: Optional[str]
+    end_time: Optional[str]
+    location: Optional[str]
+    confidence: float
+
+
+@dataclass
+class RecurringRule:
+    raw_text: str
+    page_num: int
+    days: List[str]
+    time: Optional[str]
+    section: str
 
 def extract_class_name(text: str) -> str:
     lines = [line.strip() for line in text.splitlines() if line.strip()]
@@ -271,6 +295,13 @@ def parse_date(line: str, year: int) -> Optional[str]:
         month = MONTH_MAP[month_str]
         return datetime(year, month, day).strftime("%Y-%m-%d")
 
+    day_month_match = DAY_MONTH_RE.search(line)
+    if day_month_match:
+        day = int(day_month_match.group(1))
+        month_str = day_month_match.group(2).lower()
+        month = MONTH_MAP[month_str]
+        return datetime(year, month, day).strftime("%Y-%m-%d")
+
     numeric_match = NUMERIC_DATE_RE.search(line)
     if numeric_match:
         month = int(numeric_match.group(1))
@@ -305,21 +336,95 @@ def parse_time_range(line: str):
     end_time = to_24_hour(matches[1]) if len(matches) > 1 else None
     return start_time, end_time
 
-def categorize(line: str):
+
+# New helper functions for recurring rules and candidate building
+def parse_recurring_rule(line: str, page_num: int, section: str) -> Optional[RecurringRule]:
     lower = line.lower()
-    if "midterm" in lower or "exam" in lower or "final" in lower:
-        return "exam"
-    if "quiz" in lower:
-        return "quiz"
-    if "due" in lower or "ps" in lower or "proposal" in lower or "bibliography" in lower or "paper" in lower or "project" in lower:
-        return "assignment"
-    if "no class" in lower or "holiday" in lower or "recess" in lower or "reading week" in lower:
-        return "holiday"
-    if "lecture" in lower:
-        return "lecture"
-    if "talk:" in lower or "discussion:" in lower:
-        return "other"
-    return "other"
+    recurring_days = []
+
+    day_map = {
+        "monday": "MO",
+        "tuesday": "TU",
+        "wednesday": "WE",
+        "thursday": "TH",
+        "friday": "FR",
+        "saturday": "SA",
+        "sunday": "SU",
+    }
+
+    for day_name, day_code in day_map.items():
+        plural_pattern = rf"\b{day_name}s\b"
+        singular_pattern = rf"\b{day_name}\b"
+        if re.search(plural_pattern, lower) or re.search(singular_pattern, lower):
+            recurring_days.append(day_code)
+
+    if not recurring_days:
+        return None
+
+    start_time, _ = parse_time_range(line)
+    return RecurringRule(
+        raw_text=line,
+        page_num=page_num,
+        days=recurring_days,
+        time=start_time,
+        section=section,
+    )
+
+
+def compute_confidence(line: str, section: str, kind: str, has_date: bool, has_time: bool) -> float:
+    lower = line.lower()
+    confidence = 0.15
+
+    if has_date:
+        confidence += 0.35
+    if has_time:
+        confidence += 0.10
+    if section in {"assignments", "schedule"}:
+        confidence += 0.20
+    if kind in {"assignment_due", "exam", "quiz", "holiday", "required_event"}:
+        confidence += 0.15
+    if any(word in lower for word in ["due", "required", "midterm", "final", "quiz"]):
+        confidence += 0.10
+    if any(noise in lower for noise in ["page ", "last revised", "course description", "office hours"]):
+        confidence -= 0.25
+    if kind == "lecture" and "due" not in lower and "exam" not in lower:
+        confidence -= 0.10
+
+    return max(0.05, min(0.99, round(confidence, 2)))
+
+
+def build_candidate(line: str, page_num: int, section: str, year: int) -> Optional[ParsedCandidate]:
+    if not useful_line(line):
+        return None
+    
+    date = parse_date(line, year)
+    if not date:
+        return None
+
+    start_time, end_time = parse_time_range(line)
+    kind = infer_event_kind(line, section)
+    if kind == "other":
+        return None
+    location = extract_location(line)
+    confidence = compute_confidence(
+        line=line,
+        section=section,
+        kind=kind,
+        has_date=date is not None,
+        has_time=start_time is not None,
+    )
+
+    return ParsedCandidate(
+        raw_text=line,
+        page_num=page_num,
+        section=section,
+        kind=kind,
+        date=date,
+        start_time=start_time,
+        end_time=end_time,
+        location=location,
+        confidence=confidence,
+    )
 
 def useful_line(line: str):
     lower = line.lower()
@@ -327,7 +432,7 @@ def useful_line(line: str):
         return False
     if not any(good in lower for good in GOOD_KEYWORDS):
         return False
-    if not (DATE_RE.search(line) or NUMERIC_DATE_RE.search(line) or DATE_RANGE_RE.search(line)):
+    if not (DATE_RE.search(line) or DAY_MONTH_RE.search(line) or NUMERIC_DATE_RE.search(line) or DATE_RANGE_RE.search(line)):
         return False
     return True
 
@@ -341,7 +446,57 @@ def extract_location(line: str) -> Optional[str]:
     return None
 
 
-def clean_title(line: str, class_name: str):
+# Section/kind logic block and categorize
+def classify_section(line: str, current_section: str = "other") -> str:
+    lower = line.lower()
+
+    section_headers = {
+        "grading": ["grading", "evaluation"],
+        "assignments": ["assignments", "writing", "research portfolio", "written assignment", "midterm paper"],
+        "policies": ["attendance", "late work", "honor code", "academic honesty", "special notes"],
+        "schedule": ["content overview", "lecture outline", "week lecture description", "class schedule", "readings"],
+        "course_info": ["course description", "course objectives", "course information and procedures"],
+    }
+
+    for section_name, markers in section_headers.items():
+        if any(marker in lower for marker in markers):
+            return section_name
+
+    return current_section
+
+
+
+def infer_event_kind(line: str, section: str) -> str:
+    lower = line.lower()
+
+    if "midterm" in lower or "final exam" in lower or "final examination" in lower or ("exam" in lower and "review" not in lower):
+        return "exam"
+    if "quiz" in lower:
+        return "quiz"
+    if "no class" in lower or "holiday" in lower or "recess" in lower or "reading week" in lower or "spring break" in lower:
+        return "holiday"
+    if "required" in lower and ("fair" in lower or "conference" in lower or "meeting" in lower):
+        return "required_event"
+    if "due" in lower or "proposal" in lower or "bibliography" in lower or "paper" in lower or "project" in lower or "ps" in lower or "problem set" in lower:
+        return "assignment_due"
+    return "other"
+
+
+
+def categorize(kind: str) -> str:
+    if kind == "exam":
+        return "exam"
+    if kind == "quiz":
+        return "quiz"
+    if kind == "assignment_due":
+        return "assignment"
+    if kind == "holiday":
+        return "holiday"
+    return "other"
+
+
+# New clean_title version
+def clean_title(line: str, class_name: str, kind: str = "other"):
     lower = line.lower()
 
     if "annotated bibliography" in lower:
@@ -350,6 +505,10 @@ def clean_title(line: str, class_name: str):
         return f"Research Proposal — {class_name}"
     if "completed paper" in lower or "final project" in lower:
         return f"Final Project — {class_name}"
+    if "research paper and portfolio due" in lower:
+        return f"Research Paper & Portfolio Due — {class_name}"
+    if "reflection due" in lower:
+        return f"Reflection Due — {class_name}"
     if "revised research paper" in lower:
         return f"Revised Research Paper — {class_name}"
     if "midterm" in lower and "review" not in lower:
@@ -390,16 +549,16 @@ def clean_title(line: str, class_name: str):
         return f"Topic Due — {class_name}"
     if "sketch due" in lower:
         return f"Sketch Due — {class_name}"
-    if "spring recess" in lower:
+    if "spring recess" in lower or "spring break" in lower:
         return f"Spring Recess — {class_name}"
     if "reading week" in lower:
         return f"Reading Week — {class_name}"
     if "no class" in lower:
         return f"No Class — {class_name}"
-    if "talk:" in lower or "discussion:" in lower or "lecture" in lower:
-        trimmed = re.sub(r"\s+", " ", line).strip()
-        return trimmed[:80]
-    if "due" in lower:
+    if kind == "required_event":
+        cleaned = re.sub(r"\s+", " ", line).strip()
+        return f"{cleaned[:55]} — {class_name}"
+    if "due" in lower or kind == "assignment_due":
         cleaned = re.sub(r"\s+", " ", line).strip()
         return f"{cleaned[:50]} — {class_name}"
     return re.sub(r"\s+", " ", line).strip()[:80]
@@ -408,6 +567,7 @@ def parse_syllabus_pdf(file_bytes: bytes) -> List[Dict]:
     doc = fitz.open(stream=file_bytes, filetype="pdf")
     events = []
     seen = set()
+    recurring_rules: List[RecurringRule] = []
 
     full_text_parts = []
     page_lines = []
@@ -422,43 +582,48 @@ def parse_syllabus_pdf(file_bytes: bytes) -> List[Dict]:
     short_class_name = class_code_only(class_name)
     year = extract_year(full_text)
 
+    current_section = "other"
+
     for page_num, lines in enumerate(page_lines, start=1):
         for line in lines:
-            if not useful_line(line):
+            current_section = classify_section(line, current_section)
+
+            recurring_rule = parse_recurring_rule(line, page_num, current_section)
+            if recurring_rule is not None:
+                recurring_rules.append(recurring_rule)
+
+            candidate = build_candidate(line, page_num, current_section, year)
+            if candidate is None:
                 continue
 
-            date = parse_date(line, year)
-            if not date:
-                continue
-
-            title = clean_title(line, short_class_name)
-            title_key = normalize_title(f"{title}|{date}")
+            title = clean_title(candidate.raw_text, short_class_name, candidate.kind)
+            title_key = normalize_title(f"{title}|{candidate.date}|{candidate.kind}")
             if title_key in seen:
                 continue
             seen.add(title_key)
 
-            start_time, end_time = parse_time_range(line)
-            location = extract_location(line)
+            notes_parts = [
+                f"Source line: {candidate.raw_text}",
+                f"Section: {candidate.section}",
+                f"Kind: {candidate.kind}",
+            ]
+            if candidate.location:
+                notes_parts.append(f"Location: {candidate.location}")
 
-            confidence = 0.78
-            if page_num >= max(len(page_lines) - 1, 1):
-                confidence = 0.93
-            elif page_num >= 4:
-                confidence = 0.88
-
-            notes_parts = [f"Source line: {line}"]
-            if location:
-                notes_parts.append(f"Location: {location}")
+            matching_rules = [rule for rule in recurring_rules if rule.page_num == page_num and rule.section == candidate.section]
+            if matching_rules:
+                rule = matching_rules[-1]
+                notes_parts.append(f"Recurring rule context: days={','.join(rule.days)} time={rule.time or 'unspecified'}")
 
             events.append({
                 "id": str(uuid.uuid4()),
                 "title": title,
-                "date": date,
-                "startTime": start_time,
-                "endTime": end_time,
-                "category": categorize(line),
-                "confidence": confidence,
-                "sourceSnippet": f"Page {page_num}: {line}",
+                "date": candidate.date,
+                "startTime": candidate.start_time,
+                "endTime": candidate.end_time,
+                "category": categorize(candidate.kind),
+                "confidence": candidate.confidence,
+                "sourceSnippet": f"Page {candidate.page_num}: {candidate.raw_text}",
                 "notes": " | ".join(notes_parts),
             })
 
